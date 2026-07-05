@@ -63,10 +63,12 @@ jobs:
           zip -r fab-chrome-extension.zip . \
             -x '.git/*' \
             -x '.github/*' \
-            -x 'SPECS.md' \
-            -x 'README.md' \
             -x '.gitignore' \
-            -x '.claude/*'
+            -x '.claude/*' \
+            -x 'README.md' \
+            -x 'SPECS.md' \
+            -x 'LICENSE' \
+            -x 'images/*'
 
       - name: Upload zip as workflow artifact
         uses: actions/upload-artifact@v4

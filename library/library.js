@@ -483,13 +483,11 @@ $("#btn-login-prompt")?.addEventListener("click", () => {
 // ==================== Progress Bar ====================
 function renderProgressBar(current, total, label, detail) {
   const pct = total ? Math.round(current / total * 100) : 0;
+  const text = detail ? `${escapeHtml(label)} · ${escapeHtml(detail)}` : escapeHtml(label);
   return `
     <div class="progress-container">
       <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-      <div class="progress-text">
-        <span>${escapeHtml(label)}</span>
-        ${detail ? `<span>${escapeHtml(detail)}</span>` : ''}
-      </div>
+      <div class="progress-text"><span>${text}</span></div>
     </div>`;
 }
 
