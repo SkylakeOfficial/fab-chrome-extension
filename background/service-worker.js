@@ -42,6 +42,10 @@ async function handleAuthCode({ code }) {
   try {
     const tokens = await exchangeCode(code);
     await setAuth(tokens);
+    // Open library page directly (popup may have closed when user switched to OAuth tab)
+    chrome.tabs.create({ url: chrome.runtime.getURL("library/library.html") });
+    // Also broadcast so any open extension pages can refresh UI
+    chrome.runtime.sendMessage({ action: "auth:complete", displayName: tokens.displayName }).catch(() => {});
     return { status: "ok", displayName: tokens.displayName, accountId: tokens.accountId };
   } catch (e) {
     return { status: "error", message: e.message };

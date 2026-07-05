@@ -6,12 +6,13 @@ const CHUNK_CONCURRENCY = 16;
 
 // ==================== Chunk Cache (browser, batched proxy) ====================
 class ChunkCache {
-  constructor(chunkById, baseUrls, manifestVersion, baseUrlTokens = null, maxConcurrent = CHUNK_CONCURRENCY) {
+  constructor(chunkById, baseUrls, manifestVersion, baseUrlTokens = null, maxConcurrent = CHUNK_CONCURRENCY, signal = null) {
     this.chunkById = chunkById;
     this.baseUrls = baseUrls;
     this.baseUrlTokens = baseUrlTokens; // parallel to baseUrls — CDN token per URL
     this.manifestVersion = manifestVersion;
     this.maxConcurrent = maxConcurrent;
+    this.signal = signal;
     this.inflight = new Map();
     this.active = 0;
     this.waiters = [];
@@ -98,6 +99,7 @@ class ChunkCache {
 
   async fetchWithRetry(url, retries = 3) {
     for (let i = 0; i < retries; i++) {
+      if (this.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       try {
         const data = await this.queueUrl(url);
         if (!data) throw new Error('empty response');
@@ -106,6 +108,7 @@ class ChunkCache {
         for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
         return bytes;
       } catch (e) {
+        if (e.name === 'AbortError') throw e;
         if (i < retries - 1) await new Promise(r => setTimeout(r, Math.min(500 * Math.pow(2, i), 5000)));
         else throw e;
       }
@@ -113,6 +116,7 @@ class ChunkCache {
   }
 
   async get(guid) {
+    if (this.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const cached = this.inflight.get(guid);
     if (cached) return cached;
 
@@ -188,7 +192,7 @@ function tarHeader(filename, size) {
 
 const ZERO512 = new Uint8Array(512);
 
-async function buildTar(fileManifestList, cache, dirHandle, assetName, onProgress) {
+async function buildTar(fileManifestList, cache, dirHandle, assetName, onProgress, signal = null) {
   // Create the .tar file
   const tarName = `${assetName}.tar`;
   const fh = await dirHandle.getFileHandle(tarName, { create: true });
@@ -198,6 +202,7 @@ async function buildTar(fileManifestList, cache, dirHandle, assetName, onProgres
   const total = fileManifestList.length;
 
   for (const file of fileManifestList) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const hasher = new IncrementalSHA1();
     const header = tarHeader(file.filename, file.fileSize);
     await w.write(header);
@@ -241,7 +246,7 @@ async function buildTar(fileManifestList, cache, dirHandle, assetName, onProgres
 
 // ==================== Main Download Pipeline ====================
 
-export async function downloadAsset({ manifestUrls, baseUrls, baseUrlTokens, manifestBase64, dirHandle, assetName, onProgress }) {
+export async function downloadAsset({ manifestUrls, baseUrls, baseUrlTokens, manifestBase64, dirHandle, assetName, onProgress, signal }) {
   // Step 1: Get manifest binary
   let manifestBytes = null;
   if (manifestBase64) {
@@ -275,7 +280,7 @@ export async function downloadAsset({ manifestUrls, baseUrls, baseUrlTokens, man
   const chunkById = new Map();
   for (const ck of chunkDataList) chunkById.set(ck.guid, ck);
 
-  const cache = new ChunkCache(chunkById, baseUrls, version, baseUrlTokens, CHUNK_CONCURRENCY);
-  return await buildTar(fileManifestList, cache, dirHandle, assetName, onProgress);
+  const cache = new ChunkCache(chunkById, baseUrls, version, baseUrlTokens, CHUNK_CONCURRENCY, signal);
+  return await buildTar(fileManifestList, cache, dirHandle, assetName, onProgress, signal);
 }
 // parseManifestFromBytes imported from lib/browser-manifest-parser.js

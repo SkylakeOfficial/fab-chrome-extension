@@ -9,6 +9,13 @@ const $$ = (sel, parent = document) => [...parent.querySelectorAll(sel)];
 let allItems = [];
 let engineVersions = new Set();
 
+/** Active downloads: key = `${assetId}::${artifactId}` */
+const activeDownloads = new Map();
+
+function downloadKey(assetId, artifactId) {
+  return `${assetId}::${artifactId}`;
+}
+
 // ==================== Type badge mapping ====================
 const TYPE_BADGES = {
   "3D":                { cls: "badge-blue",   label: "3D" },
@@ -29,7 +36,6 @@ const TYPE_BADGES = {
 function getBadge(item) {
   const listingBadge = TYPE_BADGES[item.listingType] || { cls: "badge-gray", label: item.listingType };
   const methodBadge = TYPE_BADGES[item.distributionMethod];
-  // distributionMethod is more specific; prefer it if different from listing
   if (methodBadge && item.distributionMethod !== item.listingType) {
     return [listingBadge, methodBadge];
   }
@@ -206,33 +212,66 @@ function createCard(item) {
       </select>
       <div class="card-actions">
         <button class="btn btn-primary btn-download" disabled>Download</button>
+        <button class="btn btn-danger btn-cancel" style="display:none">Cancel</button>
         <span class="download-status"></span>
       </div>
     </div>
   `;
 
-  // Click header to expand/collapse
-  $(".card-header", card).addEventListener("click", () => {
+  // Click card (anywhere) to expand/collapse — but not on interactive elements
+  card.addEventListener("click", (e) => {
+    // Don't toggle when clicking interactive controls
+    if (e.target.closest('select, button, input, a')) return;
+    // Don't collapse cards with active downloads
+    if (card.classList.contains("expanded") && card.dataset.downloadActive === "1") return;
     const wasExpanded = card.classList.contains("expanded");
-    $$(".card.expanded").forEach(c => c.classList.remove("expanded"));
+    // Collapse other cards (but not those with active downloads)
+    $$(".card.expanded").forEach(c => {
+      if (c.dataset.downloadActive !== "1") c.classList.remove("expanded");
+    });
     if (!wasExpanded) card.classList.add("expanded");
   });
 
   // Version select → enable download
   const select = $(".version-select", card);
-  const btn = $(".btn-download", card);
+  const btnDownload = $(".btn-download", card);
+  const btnCancel = $(".btn-cancel", card);
   const status = $(".download-status", card);
 
   select.addEventListener("change", () => {
-    btn.disabled = !select.value;
+    const key = downloadKey(item.assetId, select.value);
+    const active = activeDownloads.get(key);
+    if (active) {
+      // Re-select the currently downloading version → show cancel UI
+      restoreDownloadUI(card, active);
+    } else {
+      btnDownload.disabled = !select.value;
+      btnDownload.textContent = "Download";
+      btnCancel.style.display = "none";
+      status.innerHTML = "";
+    }
   });
 
   select.addEventListener("dblclick", (e) => {
     e.stopPropagation();
   });
 
-  // Download button — browser-native download via File System Access API
-  btn.addEventListener("click", async (e) => {
+  // Check if any version of this item has an active download — restore UI
+  for (const pv of (item.projectVersions || [])) {
+    const key = downloadKey(item.assetId, pv.artifactId);
+    const active = activeDownloads.get(key);
+    if (active) {
+      // Pre-select the downloading version
+      select.value = pv.artifactId;
+      card.classList.add("expanded");
+      card.dataset.downloadActive = "1";
+      restoreDownloadUI(card, active);
+      break;
+    }
+  }
+
+  // Download button
+  btnDownload.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!select.value) return;
 
@@ -241,48 +280,130 @@ function createCard(item) {
     const assetNamespace = option.dataset.namespace;
     const artifactId = option.value;
 
-    btn.disabled = true;
-    status.innerHTML = '<span class="download-progress">Getting manifest...</span>';
+    await startDownload(card, item, assetId, assetNamespace, artifactId, status, btnDownload, btnCancel);
+  });
 
-    try {
-      const resp = await chrome.runtime.sendMessage({
-        action: "manifest:fetch",
-        assetId, assetNamespace, artifactId,
-      });
-
-      if (resp?.status !== "ok") {
-        throw new Error(resp?.message || "Failed to get manifest");
-      }
-      debug.log('manifestBase64:', resp.manifestBase64 ? `${resp.manifestBase64.length} chars` : 'MISSING!');
-      debug.log('manifestUrls:', resp.manifestUrls?.length, 'baseUrls:', resp.baseUrls?.length);
-
-      await handleBrowserDownload(item, resp, status);
-    } catch (e) {
-      if (e.name === 'AbortError') {
-        status.innerHTML = '<span style="color:#94a3b8;font-size:12px">Cancelled.</span>';
-      } else {
-        debug.warn('Download failed:', e.message);
-        status.innerHTML = `<span style="color:#f87171;font-size:12px">${escapeHtml(e.message)}</span>`;
-        showToast(e.message, "error");
-      }
+  // Cancel button
+  btnCancel.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const key = downloadKey(item.assetId, select.value);
+    const active = activeDownloads.get(key);
+    if (active) {
+      active.controller.abort();
+      btnCancel.textContent = "Cancelling...";
+      btnCancel.disabled = true;
     }
-    btn.disabled = false;
   });
 
   return card;
 }
 
+// ==================== Download management ====================
+
+async function startDownload(card, item, assetId, assetNamespace, artifactId, statusEl, btnDownload, btnCancel) {
+  const key = downloadKey(assetId, artifactId);
+  const controller = new AbortController();
+
+  btnDownload.disabled = true;
+  btnDownload.style.display = "none";
+  btnCancel.style.display = "";
+  btnCancel.textContent = "Cancel";
+  btnCancel.disabled = false;
+  card.dataset.downloadActive = "1";
+  card.classList.add("expanded");
+  statusEl.innerHTML = '<span class="download-progress">Getting manifest...</span>';
+
+  const state = { controller, item, progress: { phase: 'manifest', current: 0, total: 0, totalWritten: 0, label: 'Getting manifest...', detail: '' } };
+  activeDownloads.set(key, state);
+
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: "manifest:fetch",
+      assetId, assetNamespace, artifactId,
+    });
+
+    if (resp?.status !== "ok") {
+      throw new Error(resp?.message || "Failed to get manifest");
+    }
+
+    await handleBrowserDownload(item, resp, controller.signal, (p) => {
+      state.progress = p;
+      if (statusEl.isConnected) updateProgressUI(statusEl, p);
+    });
+  } catch (e) {
+    if (e.name === 'AbortError' || controller.signal.aborted) {
+      if (statusEl.isConnected) {
+        statusEl.innerHTML = '<span style="color:#94a3b8;font-size:12px">Cancelled.</span>';
+      }
+    } else {
+      debug.warn('Download failed:', e.message);
+      if (statusEl.isConnected) {
+        statusEl.innerHTML = `<span style="color:#f87171;font-size:12px">${escapeHtml(e.message)}</span>`;
+      }
+      showToast(e.message, "error");
+    }
+  } finally {
+    activeDownloads.delete(key);
+    if (card.isConnected) {
+      card.dataset.downloadActive = "0";
+      btnDownload.style.display = "";
+      btnDownload.disabled = false;
+      btnCancel.style.display = "none";
+    }
+  }
+}
+
+function restoreDownloadUI(card, state) {
+  const btnDownload = $(".btn-download", card);
+  const btnCancel = $(".btn-cancel", card);
+  const status = $(".download-status", card);
+
+  btnDownload.style.display = "none";
+  btnDownload.disabled = true;
+  btnCancel.style.display = "";
+  btnCancel.textContent = "Cancel";
+  btnCancel.disabled = false;
+  card.dataset.downloadActive = "1";
+  card.classList.add("expanded");
+
+  updateProgressUI(status, state.progress);
+}
+
+function updateProgressUI(statusEl, p) {
+  if (p.phase === 'parsing' || p.phase === 'manifest') {
+    statusEl.innerHTML = renderProgressBar(0, 0, 'Parsing manifest...');
+  } else if (p.phase === 'downloading') {
+    const pct = p.total ? Math.round(p.current / p.total * 100) : 0;
+    const parts = [`File ${p.current}/${p.total}`];
+    if (p.speed) parts.push(p.speed);
+    statusEl.innerHTML = renderProgressBar(p.current, p.total,
+      parts.join(' · '),
+      p.totalWritten ? formatSize(p.totalWritten) : ''
+    );
+  } else if (p.phase === 'file_progress') {
+    const filePct = p.fileSize ? Math.round(p.fileBytes / p.fileSize * 100) : 0;
+    statusEl.innerHTML = renderProgressBar(p.current, p.total,
+      `${p.filename?.replace(/.*\//, '')} ${filePct}%`,
+      p.totalWritten ? formatSize(p.totalWritten) : ''
+    );
+  } else if (p.phase === 'done') {
+    statusEl.innerHTML = `<span class="download-done">&#10003; ${escapeHtml(p.filename || '')} (${formatSize(p.totalWritten)})</span>`;
+  }
+}
+
 // ==================== Browser-native download (File System Access API) ====================
 
-async function handleBrowserDownload(item, resp, status) {
+async function handleBrowserDownload(item, resp, signal, onProgress) {
   try {
-    status.innerHTML = '<span class="download-progress">Pick a folder to save files...</span>';
+    onProgress({ phase: 'parsing', current: 0, total: 0, totalWritten: 0, label: 'Pick a folder...', detail: '' });
     const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
 
-    status.innerHTML = renderProgressBar(0, 0, 'Downloading...');
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    onProgress({ phase: 'downloading', current: 0, total: 0, totalWritten: 0, label: 'Downloading...', detail: '', speed: '' });
 
     const assetName = sanitizeFilename(item.title);
-    let lastUpdate = Date.now();
+    let lastUpdate = 0;
     let lastBytes = 0;
 
     await downloadAsset({
@@ -292,43 +413,32 @@ async function handleBrowserDownload(item, resp, status) {
       baseUrlTokens: resp.baseUrlTokens,
       dirHandle,
       assetName,
+      signal,
       onProgress: (p) => {
         const now = Date.now();
-        if (now - lastUpdate < 200 && p.phase !== 'file_progress') return;
+        const elapsed = now - lastUpdate;
+        if (elapsed < 200 && p.phase !== 'file_progress') return;
         lastUpdate = now;
 
-        if (p.phase === 'parsing') {
-          status.innerHTML = renderProgressBar(0, 0, 'Parsing manifest...');
-        } else if (p.phase === 'downloading') {
-          const pct = p.total ? Math.round(p.current / p.total * 100) : 0;
-          const speed = p.totalWritten && lastBytes
-            ? formatSpeed((p.totalWritten - lastBytes) / ((now - lastUpdate) / 1000))
+        if (p.phase === 'downloading') {
+          const speed = p.totalWritten && lastBytes && elapsed > 0
+            ? formatSpeed((p.totalWritten - lastBytes) / (elapsed / 1000))
             : '';
           lastBytes = p.totalWritten || 0;
-          status.innerHTML = renderProgressBar(p.current, p.total,
-            `File ${p.current}/${p.total}${speed ? ' · ' + speed : ''}`,
-            p.totalWritten ? formatSize(p.totalWritten) : ''
-          );
-        } else if (p.phase === 'file_progress') {
-          const filePct = p.fileSize ? Math.round(p.fileBytes / p.fileSize * 100) : 0;
-          status.innerHTML = renderProgressBar(p.current, p.total,
-            `${p.filename?.replace(/.*\//, '')} ${filePct}%`,
-            p.totalWritten ? formatSize(p.totalWritten) : ''
-          );
+          onProgress({ ...p, speed });
+        } else if (p.phase === 'done') {
+          onProgress({ phase: 'done', totalWritten: lastBytes, filename: `${assetName}.tar` });
+        } else {
+          onProgress(p);
         }
       },
     });
-
-    status.innerHTML = `<span class="download-done">&#10003; ${assetName}.tar (${formatSize(lastBytes)})</span>`;
-    showToast(`Saved! Extract the .tar (tar -xf or 7-Zip) to use.`);
   } catch (fsErr) {
-    if (fsErr.name === 'AbortError') {
-      status.innerHTML = '<span style="color:#94a3b8;font-size:12px">Cancelled.</span>';
-      return;
+    if (fsErr.name === 'AbortError' || signal.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
     }
     const detail = `${fsErr.name}: ${fsErr.message}`;
     debug.warn('Download failed:', detail, fsErr);
-    status.innerHTML = `<span style="color:#f87171;font-size:12px">Download failed: ${escapeHtml(detail)}</span>`;
     throw fsErr;
   }
 }
@@ -393,7 +503,7 @@ function formatSize(bytes) {
 }
 
 function formatSpeed(bps) {
-  if (!bps || bps < 0) return '';
+  if (!bps || bps <= 0 || !isFinite(bps)) return '';
   const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
   let i = 0;
   let v = bps;
