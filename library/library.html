@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fab Library — Content Downloader</title>
+<link rel="stylesheet" href="library.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">FAB</span>
+      <span class="title">Content Library</span>
+    </div>
+    <div class="user-info">
+      <span id="display-name" class="account-label">Not logged in</span>
+      <button id="btn-refresh" class="btn-icon" title="Refresh library">&#8635;</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <input type="search" id="search-input" class="search-box" placeholder="Search your library...">
+    <select id="filter-type" class="filter-select">
+      <option value="">All Types</option>
+      <option value="工具与插件">Tools &amp; Plugins</option>
+      <option value="3D">3D Assets</option>
+      <option value="COMPLETE_PROJECT">Projects</option>
+      <option value="游戏系统">Game Systems</option>
+      <option value="材质与纹理">Materials &amp; Textures</option>
+      <option value="视觉效果">Visual Effects</option>
+      <option value="动画">Animation</option>
+      <option value="游戏模板">Game Templates</option>
+      <option value="教程和示例">Tutorials &amp; Samples</option>
+      <option value="Legacy">Legacy</option>
+    </select>
+    <select id="filter-engine" class="filter-select">
+      <option value="">All Engine Versions</option>
+    </select>
+    <span id="result-count" class="result-count"></span>
+  </div>
+
+  <div id="loading-state" class="loading-container">
+    <div class="loading-spinner"></div>
+    <p>Loading your Fab library...</p>
+  </div>
+
+  <div id="empty-state" class="empty-container" style="display:none">
+    <p>No items found.</p>
+    <button id="btn-login-prompt" class="btn btn-primary">Login with Epic Games</button>
+  </div>
+
+  <div id="card-grid" class="card-grid" style="display:none"></div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+</body>
+<script src="library.js" type="module"></script>
+</html>

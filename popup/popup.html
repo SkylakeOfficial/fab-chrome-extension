@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <span class="logo">FAB</span>
+    <span class="title">Content Downloader</span>
+  </div>
+
+  <!-- Logged Out State -->
+  <div id="state-logged-out" class="state">
+    <p class="hint">Login to your Epic Games account to access your Fab content library.</p>
+    <button id="btn-login" class="btn btn-primary">Login with Epic Games</button>
+    <details class="manual-section">
+      <summary>Or paste authorization code manually</summary>
+      <input type="text" id="manual-code" class="input" placeholder="Paste 32-char authorization code">
+      <button id="btn-manual" class="btn btn-secondary">Submit Code</button>
+    </details>
+  </div>
+
+  <!-- Loading State -->
+  <div id="state-loading" class="state" style="display:none">
+    <div class="loading-spinner"></div>
+    <p class="hint">Checking authentication...</p>
+  </div>
+
+  <!-- Auth Pending State -->
+  <div id="state-pending" class="state" style="display:none">
+    <div class="loading-spinner"></div>
+    <p class="hint">Waiting for login in browser tab...</p>
+    <p class="micro">Complete the Epic login in the opened tab.</p>
+  </div>
+
+  <!-- Logged In State -->
+  <div id="state-logged-in" class="state" style="display:none">
+    <div class="account-card">
+      <div class="account-avatar" id="account-avatar"></div>
+      <div class="account-info">
+        <span class="account-name" id="account-name"></span>
+        <span class="account-id" id="account-id"></span>
+      </div>
+    </div>
+    <div class="cache-status" id="cache-status"></div>
+    <button id="btn-open-library" class="btn btn-primary">Open Library</button>
+    <button id="btn-logout" class="btn btn-ghost">Logout</button>
+  </div>
+
+  <!-- Error State -->
+  <div id="state-error" class="state" style="display:none">
+    <p class="hint error-text" id="error-message"></p>
+    <button id="btn-retry" class="btn btn-primary">Retry</button>
+  </div>
+
+  <div class="toast" id="toast" style="display:none"></div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
